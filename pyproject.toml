@@ -1,0 +1,18 @@
+[project]
+name = "rag-chatbot"
+version = "0.1.0"
+description = "RAG chatbot"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "chromadb",
+    "datasets>=5.0.1",
+    "gradio",
+    "langchain",
+    "langchain-chroma",
+    "langchain-community",
+    "langchain-nvidia-ai-endpoints",
+    "python-dotenv",
+    "ragas>=0.4.3",
+    "tiktoken>=0.14.0",
+]
