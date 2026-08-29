@@ -14,11 +14,7 @@ if not os.path.exists(chroma_dir) or not os.listdir(chroma_dir):
     except Exception as e:
         print(f"⚠️ Ingestion failed: {e}")
 
-from app import demo
+from src.app import demo
 
 if __name__ == "__main__":
-    demo.launch(
-        server_name="0.0.0.0",
-        server_port=7860,
-        share=True  
-    )
+    demo.launch(server_name="0.0.0.0", server_port=7860)
