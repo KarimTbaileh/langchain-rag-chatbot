@@ -1,3 +1,14 @@
+---
+title: LangChain RAG Chatbot
+emoji: 🤖
+colorFrom: blue
+colorTo: indigo
+sdk: gradio
+sdk_version: 4.44.1
+app_file: app.py
+pinned: false
+---
+
 # LangChain RAG Chatbot
 
 A production-ready **Retrieval-Augmented Generation (RAG) chatbot** that answers questions grounded in the official **LangChain documentation**. It combines **LangChain (LCEL)**, **NVIDIA NIM** models, a persistent **ChromaDB** vector store, a **SQLite** metadata database, and a **Gradio** multi-turn chat UI — with a full **RAGAS** evaluation suite covering all six quality metrics.
