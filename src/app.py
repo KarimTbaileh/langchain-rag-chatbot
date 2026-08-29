@@ -159,7 +159,6 @@ def build_demo() -> gr.Blocks:
             label="Conversation",
             elem_id="chatbot",
             render_markdown=True,
-            buttons=["copy"],
             height="100%",
         )
         textbox = gr.Textbox(
