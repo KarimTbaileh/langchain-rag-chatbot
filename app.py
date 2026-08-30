@@ -16,5 +16,4 @@ if not os.path.exists(chroma_dir) or not os.listdir(chroma_dir):
 from src.app import demo
 
 if __name__ == "__main__":
-    # share=True يتجاوز فحص localhost القاتل نهائياً
-    demo.launch(share=True)
+    demo.launch()

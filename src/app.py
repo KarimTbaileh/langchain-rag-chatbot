@@ -1,3 +1,16 @@
+# ==========================================
+# SILVER BULLET: Monkey patch to fix Gradio 4.44.1 boolean schema bug on HF Spaces
+# ==========================================
+import gradio_client.utils as gradio_utils
+if not hasattr(gradio_utils, '_original_get_type'):
+    gradio_utils._original_get_type = gradio_utils.get_type
+    def _patched_get_type(schema):
+        if isinstance(schema, bool):
+            return "any" if schema else "null"
+        return gradio_utils._original_get_type(schema)
+    gradio_utils.get_type = _patched_get_type
+# ==========================================
+
 import gradio as gr
 from src.rag_pipeline import get_pipeline
 
@@ -12,47 +25,21 @@ def respond(message, history):
                 f"- [{s.metadata.get('source', 'unknown')}]({s.metadata.get('source', '#')})" 
                 for s in sources
             ])
-            return answer + sources_text
-        return answer
+            history = history + [[message, answer + sources_text]]
+        else:
+            history = history + [[message, answer]]
+        return history, ""
     except Exception as e:
-        return f"⚠️ Error: {str(e)}"
+        return history + [[message, f"⚠️ Error: {str(e)}"]], ""
 
-with gr.Blocks(title="LangChain RAG Assistant") as demo:
+with gr.Blocks() as demo:
     gr.Markdown("# LangChain RAG Assistant")
     gr.Markdown("Ask questions about the official LangChain documentation.")
     
-    chatbot = gr.Chatbot(height=500)
-    msg = gr.Textbox(label="Your message", placeholder="e.g., What is a Runnable?")
-    clear = gr.Button("Clear")
-
-    def user(user_message, history):
-        return "", history + [[user_message, None]]
-
-    def bot(history):
-        user_message = history[-1][0]
-        formatted_history = [(h[0], h[1]) for h in history[:-1]]
-        
-        try:
-            pipeline = get_pipeline()
-            answer, sources = pipeline.answer(user_message, formatted_history)
-            
-            if sources:
-                sources_text = "\n\n**Sources:**\n" + "\n".join([
-                    f"- [{s.metadata.get('source', 'unknown')}]({s.metadata.get('source', '#')})" 
-                    for s in sources
-                ])
-                history[-1][1] = answer + sources_text
-            else:
-                history[-1][1] = answer
-        except Exception as e:
-            history[-1][1] = f"⚠️ Error: {str(e)}"
-            
-        return history
-
-    msg.submit(user, [msg, chatbot], [msg, chatbot], queue=False).then(
-        bot, chatbot, chatbot
-    )
-    clear.click(lambda: None, None, chatbot, queue=False)
+    chatbot = gr.Chatbot()
+    msg = gr.Textbox(placeholder="Ask a question about LangChain...")
+    
+    msg.submit(respond, [msg, chatbot], [chatbot, msg])
 
 if __name__ == "__main__":
-    demo.launch(share=True)
+    demo.launch()
