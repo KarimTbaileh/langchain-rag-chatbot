@@ -4,7 +4,6 @@ from src.rag_pipeline import get_pipeline
 def respond(message, history):
     try:
         pipeline = get_pipeline()
-        # Convert Gradio history [[user, bot], ...] to pipeline's expected format
         chat_pairs = [(h[0], h[1]) for h in history] if history else []
         answer, sources = pipeline.answer(message, chat_pairs)
         
@@ -56,4 +55,4 @@ with gr.Blocks(title="LangChain RAG Assistant") as demo:
     clear.click(lambda: None, None, chatbot, queue=False)
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(share=True)
