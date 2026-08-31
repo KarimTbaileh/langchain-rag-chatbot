@@ -70,4 +70,4 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 7860))
     print(f"🚀 Starting Gradio server on port {port}...")
     # هذا السطر هو ما يخبر Render بأن التطبيق بدأ بنجاح
-    demo.launch(server_name="0.0.0.0", server_port=port)
+    demo.launch(server_name="0.0.0.0", server_port=port, share=True)
