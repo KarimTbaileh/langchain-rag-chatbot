@@ -69,9 +69,6 @@ with gr.Blocks(
             "How does memory work?",
             "Explain LCEL with an example"
         ],
-        retry_btn="🔄 Retry",
-        undo_btn="↩️ Undo",
-        clear_btn="🗑️ Clear",
     )
 
 if __name__ == "__main__":
