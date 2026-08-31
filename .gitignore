@@ -17,9 +17,9 @@ env/
 .env.local
 
 # ---- Vector store & database -------------------------------------------------
-chroma_db/
-*.db
-*.sqlite3
+# chroma_db/
+# *.db
+# *.sqlite3
 
 # ---- Log files ----------------------------------------------------------------
 *.log
