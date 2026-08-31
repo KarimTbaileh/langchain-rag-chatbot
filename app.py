@@ -3,12 +3,23 @@ import sys
 import gradio as gr
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-
 from src.rag_pipeline import get_pipeline
 
 def respond(message, history):
     try:
         pipeline = get_pipeline()
+        
+        # 1. اختبار الـ Retriever مباشرة لمعرفة ما إذا كانت قاعدة البيانات محملة
+        docs = pipeline.retriever.invoke(message)
+        
+        if len(docs) == 0:
+            return (
+                "🔍 **فشل الاسترجاع (Retrieval Failed):**\n\n"
+                "النظام لم يجد أي مستندات مطابقة لسؤالك في قاعدة البيانات (0 documents).\n"
+                "هذا يؤكد أن مشكلة في تحميل مجلد `chroma_db` على Render، أو أن مسار قاعدة البيانات غير صحيح."
+            )
+
+        # 2. إذا وجد مستندات، نكمل العملية العادية
         chat_pairs = [(h[0], h[1]) for h in history] if history else []
         answer, sources = pipeline.answer(message, chat_pairs)
         
@@ -17,10 +28,12 @@ def respond(message, history):
                 f"- {s.metadata.get('source', 'unknown')}" 
                 for s in sources[:3]
             ])
-            return answer + sources_text
+            return f"✅ **تم العثور على {len(docs)} مستند!**\n\n{answer}{sources_text}"
+            
         return answer
+        
     except Exception as e:
-        return f"⚠️ Error: {str(e)[:200]}"
+        return f"⚠️ **خطأ في النظام:**\n{str(e)}"
 
 with gr.Blocks(
     title="LangChain RAG Assistant",
