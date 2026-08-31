@@ -5,35 +5,55 @@ import gradio as gr
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 from src.rag_pipeline import get_pipeline
 
+
+def _normalize_history(history):
+    if not history:
+        return []
+
+    normalised = []
+    for item in history:
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            human, ai = item[0], item[1]
+            if human is not None and ai is not None:
+                normalised.append((str(human), str(ai)))
+    return normalised
+
+
+def _normalize_docs(value):
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return list(value)
+    if isinstance(value, dict):
+        return list(value.values())
+    return []
+
+
 def respond(message, history):
     try:
         pipeline = get_pipeline()
-        
-        # 1. اختبار الـ Retriever مباشرة لمعرفة ما إذا كانت قاعدة البيانات محملة
-        docs = pipeline.retriever.invoke(message)
-        
+        docs = _normalize_docs(pipeline.retriever.invoke(message))
+
         if len(docs) == 0:
             return (
-                "🔍 **فشل الاسترجاع (Retrieval Failed):**\n\n"
-                "النظام لم يجد أي مستندات مطابقة لسؤالك في قاعدة البيانات (0 documents).\n"
-                "هذا يؤكد أن مشكلة في تحميل مجلد `chroma_db` على Render، أو أن مسار قاعدة البيانات غير صحيح."
+                "🔍 **Retrieval failed:**\n\n"
+                "The system did not find matching documentation for that question. "
+                "Please try a more specific LangChain question."
             )
 
-        # 2. إذا وجد مستندات، نكمل العملية العادية
-        chat_pairs = [(h[0], h[1]) for h in history] if history else []
+        chat_pairs = _normalize_history(history)
         answer, sources = pipeline.answer(message, chat_pairs)
-        
+
         if sources:
             sources_text = "\n\n---\n**📚 Sources:**\n" + "\n".join([
-                f"- {s.metadata.get('source', 'unknown')}" 
-                for s in sources[:3]
+                f"- {s.metadata.get('source', 'unknown')}" for s in sources[:3]
             ])
-            return f"✅ **تم العثور على {len(docs)} مستند!**\n\n{answer}{sources_text}"
-            
+            return f"✅ **Found {len(docs)} matches!**\n\n{answer}{sources_text}"
+
         return answer
-        
+
     except Exception as e:
-        return f"⚠️ **خطأ في النظام:**\n{str(e)}"
+        return f"⚠️ **System error:**\n{str(e)}"
 
 with gr.Blocks(
     title="LangChain RAG Assistant",

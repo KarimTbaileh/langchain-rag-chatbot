@@ -2,6 +2,30 @@ import os
 import gradio as gr
 from src.rag_pipeline import get_pipeline
 
+
+def _normalize_history(history):
+    if not history:
+        return []
+
+    normalised = []
+    for item in history:
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            human, ai = item[0], item[1]
+            if human is not None and ai is not None:
+                normalised.append((str(human), str(ai)))
+    return normalised
+
+
+def _normalize_docs(value):
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return list(value)
+    if isinstance(value, dict):
+        return list(value.values())
+    return []
+
+
 # ==========================================
 # THE ULTIMATE PATCH: Fixes Gradio Schema Bugs in Memory
 # ==========================================
@@ -33,12 +57,21 @@ if not hasattr(gradio_utils, '_original_json_schema_to_python_type'):
 def respond(message, history):
     try:
         pipeline = get_pipeline()
-        chat_pairs = [(h[0], h[1]) for h in history] if history else []
+        docs = _normalize_docs(pipeline.retriever.invoke(message))
+
+        if len(docs) == 0:
+            return (
+                "🔍 **Retrieval failed:**\n\n"
+                "The system did not find matching documentation for that question. "
+                "Please try a more specific LangChain question."
+            )
+
+        chat_pairs = _normalize_history(history)
         answer, sources = pipeline.answer(message, chat_pairs)
-        
+
         if sources:
             sources_text = "\n\n**Sources:**\n" + "\n".join([
-                f"- [{s.metadata.get('source', 'unknown')}]({s.metadata.get('source', '#')})" 
+                f"- [{s.metadata.get('source', 'unknown')}]({s.metadata.get('source', '#')})"
                 for s in sources
             ])
             return answer + sources_text
