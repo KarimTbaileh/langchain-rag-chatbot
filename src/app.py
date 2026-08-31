@@ -1,7 +1,9 @@
 # ==========================================
-# SILVER BULLET: Monkey patch to fix Gradio 4.44.1 boolean schema bug on HF Spaces
+# THE ULTIMATE PATCH: Fixes Gradio 4.44.1 Schema Bugs in Memory
 # ==========================================
 import gradio_client.utils as gradio_utils
+
+# Patch 1: Fix "TypeError: argument of type 'bool' is not iterable"
 if not hasattr(gradio_utils, '_original_get_type'):
     gradio_utils._original_get_type = gradio_utils.get_type
     def _patched_get_type(schema):
@@ -9,6 +11,21 @@ if not hasattr(gradio_utils, '_original_get_type'):
             return "any" if schema else "null"
         return gradio_utils._original_get_type(schema)
     gradio_utils.get_type = _patched_get_type
+
+# Patch 2: Fix "APIInfoParseError: Cannot parse schema True"
+if not hasattr(gradio_utils, '_original_json_schema_to_python_type'):
+    gradio_utils._original_json_schema_to_python_type = gradio_utils._json_schema_to_python_type
+    def _patched_json_schema_to_python_type(schema, defs=None):
+        if isinstance(schema, bool):
+            return "Any" if schema else "None"
+        return gradio_utils._original_json_schema_to_python_type(schema, defs)
+    gradio_utils._json_schema_to_python_type = _patched_json_schema_to_python_type
+    
+    def _patched_public_json_schema_to_python_type(schema):
+        if isinstance(schema, bool):
+            return "Any" if schema else "None"
+        return gradio_utils._original_json_schema_to_python_type(schema, schema.get("$defs") if isinstance(schema, dict) else None)
+    gradio_utils.json_schema_to_python_type = _patched_public_json_schema_to_python_type
 # ==========================================
 
 import gradio as gr
@@ -25,21 +42,18 @@ def respond(message, history):
                 f"- [{s.metadata.get('source', 'unknown')}]({s.metadata.get('source', '#')})" 
                 for s in sources
             ])
-            history = history + [[message, answer + sources_text]]
-        else:
-            history = history + [[message, answer]]
-        return history, ""
+            return answer + sources_text
+        return answer
     except Exception as e:
-        return history + [[message, f"⚠️ Error: {str(e)}"]], ""
+        return f"⚠️ Error: {str(e)}"
 
-with gr.Blocks() as demo:
-    gr.Markdown("# LangChain RAG Assistant")
-    gr.Markdown("Ask questions about the official LangChain documentation.")
-    
-    chatbot = gr.Chatbot()
-    msg = gr.Textbox(placeholder="Ask a question about LangChain...")
-    
-    msg.submit(respond, [msg, chatbot], [chatbot, msg])
+demo = gr.ChatInterface(
+    fn=respond,
+    title="LangChain RAG Assistant",
+    description="Ask questions about the official LangChain documentation.",
+    examples=["What is a Runnable?", "How does memory work in LangChain?"],
+    cache_examples=False,
+)
 
 if __name__ == "__main__":
     demo.launch()
