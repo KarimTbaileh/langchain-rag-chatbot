@@ -1,22 +1,4 @@
-"""Conversational RAG pipeline built on LangChain + NVIDIA NIM.
-
-Loads the persistent ChromaDB vector store, creates a retriever, and runs a
-grounded question-answering chain using an NVIDIA NIM LLM. The chain:
-
-    * retrieves relevant context for the question,
-    * incorporates prior chat history,
-    * answers strictly from the retrieved context (refusing to hallucinate),
-    * returns both the answer and the source documents,
-    * gracefully handles the case where no relevant context is found.
-
-The module exposes a :class:`RAGPipeline` that is convenient to call from a
-Gradio interface::
-
-    pipeline = RAGPipeline()
-    answer, sources = pipeline.answer("What is a Runnable?")
-
-A simple self-test is provided at the bottom of the module.
-"""
+"""Conversational RAG pipeline built on LangChain + NVIDIA NIM."""
 
 from __future__ import annotations
 
@@ -34,17 +16,11 @@ from langchain_nvidia_ai_endpoints import ChatNVIDIA, NVIDIAEmbeddings
 
 try:
     import config
-except ModuleNotFoundError:  # when invoked as `python -m src.rag_pipeline`
+except ModuleNotFoundError:
     from src import config
 
 logger = logging.getLogger(__name__)
 
-# Prompt that enforces strict grounding. Instructs the model to answer ONLY
-# about the official LangChain docs and to REFUSE everything else, including
-# questions the context merely "mentions" via unrelated example data. It also
-# enforces a direct, citation-backed answer format: weak models are prone to
-# rambling meta-commentary ("We need to answer using only the context..."),
-# which is explicitly forbidden.
 SYSTEM_PROMPT = """\
 You are a strict retrieval assistant. Your only job is to answer questions \
 about the official LangChain documentation, using ONLY the retrieved context. \
@@ -99,27 +75,14 @@ while staying strictly faithful to it.
 8. Keep the answer concise (1-3 short paragraphs) and directly address the \
 question. Do not add prose, congratulations, or extra examples beyond what \
 the context supplies.
-
-Example of good behaviour (formatting guide, do not copy the text):
-Question: "How does conversation history work in LangChain?"
-Good answer: "LangChain provides memory abstractions for remembering \
-information about previous interactions. Short-term memory stores messages per \
-conversation thread, and the ChatMessageHistory class keeps a record of the \
-messages in a conversation, which can be passed back into a chain so follow-up \
-questions have the needed context. [Source: \
-https://docs.langchain.com/oss/python/concepts/memory]"
 """
 
-# Message returned (without calling the LLM) when retrieval yields no
-# relevant context.
 NO_INFO_MESSAGE = (
     "I could not find information about that in the documentation. "
     "Please try rephrasing your question or ask about a topic "
     "covered in the LangChain docs."
 )
 
-# Small English function-word set used by the cheap keyword-overlap relevance
-# gate in :meth:`RAGPipeline.answer`.
 _RELEVANCE_STOPWORDS = {
     "about", "above", "after", "again", "against", "all", "also", "am", "an",
     "and", "any", "are", "as", "at", "be", "because", "been", "before",
@@ -139,9 +102,6 @@ _RELEVANCE_STOPWORDS = {
     "with", "would", "you", "your", "yours", "yourself", "yourselves",
 }
 
-# Terms (substring-matched on the lowercased question) that clearly indicate a
-# question is about the LangChain ecosystem. Used as the fast path in
-# :meth:`RAGPipeline._is_on_topic`.
 _DOMAIN_TERMS = (
     "langchain", "lcel", "runnable", "runnables", "nvidia", "chroma",
     "langserve", "langsmith", "chatmodel", "chat model", "output parser",
@@ -150,8 +110,6 @@ _DOMAIN_TERMS = (
     "genai", "ai endpoint",
 )
 
-# Single tokens (matched against the question's keywords) that flag a clearly
-# off-topic topic. Any match refuses the question without calling the LLM.
 _OFF_TOPIC_TOKENS = {
     "football", "soccer", "basketball", "baseball", "cricket", "tennis",
     "hockey", "golf", "rugby", "badminton", "olympic", "olympics", "sports",
@@ -163,19 +121,13 @@ _OFF_TOPIC_TOKENS = {
     "music", "concert",
 }
 
-# Multi-word phrases (substring-matched on the lowercased question) that flag a
-# clearly off-topic topic.
 _OFF_TOPIC_PHRASES = (
     "world cup", "euro 2024", "premier league", "stock market",
     "video game", "video games", "real madrid", "fast food",
 )
 
-# Max length of the context fed to the cheap relevance judge (keeps the call
-# fast and inexpensive).
 _JUDGE_CONTEXT_CHARS = 3000
 
-# Prompt used by the cheap LLM relevance judge. Only consulted when the keyword
-# gates above are inconclusive. The model must reply with exactly one word.
 _RELEVANCE_JUDGE_PROMPT = """\
 A user asked a question that will be answered ONLY from the LangChain \
 documentation.
@@ -212,14 +164,12 @@ class RAGPipeline:
 
     def __init__(self, *, config=config, top_k: int | None = None) -> None:
         self._config = config
-        self.top_k = top_k or config.TOP_K
+        # Safe default for TOP_K
+        self.top_k = top_k or int(getattr(config, 'TOP_K', 4))
 
         self.embeddings = self._build_embeddings()
         self.vector_store = self._load_vector_store()
-        self.retriever = self.vector_store.as_retriever(
-            search_type=config.SEARCH_TYPE,
-            search_kwargs=self._retriever_kwargs(),
-        )
+        self.retriever = self._build_retriever()
         self.llm = self._build_llm()
         self.prompt = ChatPromptTemplate.from_messages(
             [
@@ -228,16 +178,12 @@ class RAGPipeline:
             ]
         )
 
-        # LCEL chain: format the prompt, run the LLM, return the answer string.
         self.chain = (
             {"context": RunnablePassthrough(), "question": RunnablePassthrough()}
             | self.prompt
             | self.llm
         )
 
-    # ------------------------------------------------------------------ #
-    # Builders                                                            #
-    # ------------------------------------------------------------------ #
     def _build_embeddings(self) -> NVIDIAEmbeddings:
         return NVIDIAEmbeddings(
             model=self._config.EMBEDDING_MODEL,
@@ -257,32 +203,47 @@ class RAGPipeline:
             embedding_function=self.embeddings,
         )
 
+    def _build_retriever(self):
+        """Build retriever with safe defaults."""
+        # Safe default for SEARCH_TYPE
+        search_type = getattr(self._config, 'SEARCH_TYPE', 'similarity') or 'similarity'
+        if search_type not in ('similarity', 'mmr', 'similarity_score_threshold'):
+            search_type = 'similarity'
+
+        kwargs = {"k": self.top_k}
+        if search_type == "mmr":
+            kwargs.update({
+                "fetch_k": int(getattr(self._config, 'FETCH_K', 20)),
+                "lambda_mult": float(getattr(self._config, 'LAMBDA_MULT', 0.7)),
+            })
+
+        return self.vector_store.as_retriever(
+            search_type=search_type,
+            search_kwargs=kwargs,
+        )
+
     def _build_llm(self) -> ChatNVIDIA:
         return ChatNVIDIA(
             model=self._config.LLM_MODEL,
             nvidia_api_key=self._config.NVIDIA_API_KEY,
-            temperature=self._config.LLM_TEMPERATURE,
+            temperature=float(getattr(self._config, 'LLM_TEMPERATURE', 0.0)),
         )
 
     def _retriever_kwargs(self) -> dict:
-        """Search kwargs for ``as_retriever``, tuned per search type."""
         kwargs: dict = {"k": self.top_k}
-        if self._config.SEARCH_TYPE == "mmr":
+        search_type = getattr(self._config, 'SEARCH_TYPE', 'similarity') or 'similarity'
+        if search_type == "mmr":
             kwargs.update(
                 {
-                    "fetch_k": self._config.FETCH_K,
-                    "lambda_mult": self._config.LAMBDA_MULT,
+                    "fetch_k": int(getattr(self._config, 'FETCH_K', 20)),
+                    "lambda_mult": float(getattr(self._config, 'LAMBDA_MULT', 0.7)),
                 }
             )
         return kwargs
 
-    # ------------------------------------------------------------------ #
-    # Core interface                                                      #
-    # ------------------------------------------------------------------ #
     @staticmethod
     def _normalise_history(chat_history: list[tuple[str, str]]) -> list[Any]:
-        """Convert ``[(human, ai), ...]`` turns into LangChain messages."""
-        turns = chat_history[-config.MAX_HISTORY_TURNS:]
+        turns = chat_history[-getattr(config, 'MAX_HISTORY_TURNS', 5):]
         messages: list[Any] = []
         for human, ai in turns:
             messages.append(HumanMessage(content=human))
@@ -296,31 +257,14 @@ class RAGPipeline:
             for d in docs
         )
 
-    # ------------------------------------------------------------------ #
-    # Retrieval                                                           #
-    # ------------------------------------------------------------------ #
-    # The bare Chroma embedding search returns weak matches for many
-    # questions (NVIDIA nemotron-3-embed-1b compresses all Chroma chunk
-    # distances into a narrow band). We therefore widen the candidate pool
-    # (similarity search over 2xTOP_K), rank by similarity distance, and use
-    # the configured MMR retriever as a diversity back-fill so the final set
-    # is relevant but not narrowed to a single matched page. Experiments showed
-    # that LLM-based query expansion on the small NIM model injects off-topic
-    # chunks, so retrieval is deliberately deterministic on the raw question.
     def _retrieve(self, question: str) -> list[Document]:
-        """Return ``self.top_k`` chunks ranked by similarity to the question.
-
-        Primary ranking comes from ``similarity_search_with_score`` over a
-        widened pool; the MMR ``self.retriever`` only back-fills slots when the
-        similarity pool is too small, adding diversity without dominating the
-        ranking.
-        """
+        """Return self.top_k chunks ranked by similarity to the question."""
         scored: dict[str, tuple[float, Document]] = {}
         try:
             results = self.vector_store.similarity_search_with_score(
                 question, k=self.top_k * 2
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Similarity search failed; falling back to MMR")
             results = []
         for doc, distance in results:
@@ -337,24 +281,11 @@ class RAGPipeline:
                     key = doc.page_content
                     if key not in scored:
                         ranked.append((1e9, doc))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("MMR back-fill failed")
         return [doc for _, doc in ranked[: self.top_k]]
 
     def _is_on_topic(self, question: str, docs: list[Document]) -> bool:
-        """Decide whether ``question`` should be answered using ``docs``.
-
-        Three-stage guard run before the answering LLM call:
-
-        1. Clearly about LangChain (domain vocabulary) -> answer.
-        2. Clearly off-topic (sports, weather, politics, ...) -> refuse.
-        3. Inconclusive -> ask a cheap LLM judge.
-
-        The guard inspects the *question* rather than relying on keyword
-        overlap with the docs, because the documentation contains worked
-        examples about unrelated topics (e.g. an "Euro 2024" notebook) that a
-        naive overlap check would wrongly treat as relevant.
-        """
         lowered = question.lower()
 
         if any(term in lowered for term in _DOMAIN_TERMS):
@@ -374,12 +305,6 @@ class RAGPipeline:
         return self._llm_judges_relevant(question, docs)
 
     def _llm_judges_relevant(self, question: str, docs: list[Document]) -> bool:
-        """Cheap LLM judge used when the keyword gates are inconclusive.
-
-        Asks the model to answer YES/NO about whether the question is on-topic
-        for the LangChain docs AND answerable from the retrieved context. Fails
-        open (proceeds to answer) if the judge itself errors out.
-        """
         context = self._format_docs(docs)
         if len(context) > _JUDGE_CONTEXT_CHARS:
             context = context[:_JUDGE_CONTEXT_CHARS] + "\n...[truncated]"
@@ -388,7 +313,7 @@ class RAGPipeline:
         )
         try:
             response = self.llm.invoke([HumanMessage(content=judge_prompt)]).content
-        except Exception:  # noqa: BLE001 - fail open on judge failure
+        except Exception:
             logger.exception("Relevance judge failed; proceeding to answer")
             return True
         verdict = (response or "").strip().upper()
@@ -399,23 +324,13 @@ class RAGPipeline:
         question: str,
         chat_history: list[tuple[str, str]] | None = None,
     ) -> tuple[str, list[Document]]:
-        """Answer a question with retrieval + history.
-
-        Returns a ``(answer, sources)`` tuple where ``sources`` is the list of
-        retrieved documents (empty when no context was found). This shape is
-        convenient for Gradio's UI components.
-        """
         chat_history = chat_history or []
 
-        # 1. Retrieve relevant context for the question (multi-query).
         docs = self._retrieve(question)
 
-        # 2. Refuse early when there is no context or the question is clearly
-        #    unrelated to LangChain, without spending the answering LLM call.
         if not docs or not self._is_on_topic(question, docs):
             return (NO_INFO_MESSAGE, [])
 
-        # 3. Assemble the "stuff" prompt with context + history.
         context = self._format_docs(docs)
         history_messages = self._normalise_history(chat_history)
 
@@ -428,31 +343,21 @@ class RAGPipeline:
 
         return (answer_text, docs)
 
-    # Convenience alias showing this can also be expressed as a chain.
     def build_chain(self):
-        """Return the underlying LCEL chain (context + question -> answer)."""
         return self.chain
 
 
-# --------------------------------------------------------------------------- #
-# Module-level singleton builder for reuse across Gradio threads.               #
-# --------------------------------------------------------------------------- #
 _pipeline: RAGPipeline | None = None
 
 
 def get_pipeline(*, config=config, rebuild: bool = False) -> RAGPipeline:
-    """Return a shared :class:`RAGPipeline` (built lazily, cached)."""
     global _pipeline
     if _pipeline is None or rebuild:
         _pipeline = RAGPipeline(config=config)
     return _pipeline
 
 
-# --------------------------------------------------------------------------- #
-# Simple self-test                                                             #
-# --------------------------------------------------------------------------- #
 def test_pipeline(config=config) -> None:
-    """Verify the pipeline with a sample question (requires an API key)."""
     if not config.NVIDIA_API_KEY:
         print("[test] NVIDIA_API_KEY is not set. Skipping live test.")
         return
@@ -470,7 +375,6 @@ def test_pipeline(config=config) -> None:
         url = s.metadata.get("source", "?")
         print(f"  - {url}")
 
-    # Exercise chat-history follow-up.
     history = [(question, answer)]
     answer2, _ = pipeline.answer("Can you give me a short code example?", history)
     print(f"[test] Follow-up answer:\n  {answer2}\n")
